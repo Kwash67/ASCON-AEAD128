@@ -7,19 +7,19 @@ State size = 64 x 5 = 320 bits
 
 State visualization (little-endian bit indexing):
 S0    LSB -> [][][][][][][][][][][][][][][][][][][][][][][]....[][][][][][][] <- MSB
-      s(0,0)                                                          s(0,63)
+            s(0,0)                                                          s(0,63)
 
 S1    LSB -> [][][][][][][][][][][][][][][][][][][][][][][]....[][][][][][][] <- MSB
-      s(1,0)                                                          s(1,63)
+            s(1,0)                                                          s(1,63)
 
 S2    LSB -> [][][][][][][][][][][][][][][][][][][][][][][]....[][][][][][][] <- MSB
-      s(2,0)                                                          s(2,63)
+            s(2,0)                                                          s(2,63)
 
 S3    LSB -> [][][][][][][][][][][][][][][][][][][][][][][]....[][][][][][][] <- MSB
-      s(3,0)                                                          s(3,63)
+            s(3,0)                                                          s(3,63)
 
 S4    LSB -> [][][][][][][][][][][][][][][][][][][][][][][]....[][][][][][][] <- MSB
-      s(4,0)                                                          s(4,63)
+            s(4,0)                                                          s(4,63)
 
 However, we work with integers here.
 Python abstracts away endianness for integers. When converting between bytes and integers,
@@ -40,6 +40,11 @@ Sizes of each param:
 - Plaintext P: variable length
 - Ciphertext C: variable length
 
+Important clarifications for correctness:
+- Per-lane mapping: when loading/storing bytes into the 64-bit state lanes, use little-endian (le64) per lane. This applies to IV||K||N loading, AAD/PT absorption, and CT/TAG emission.
+- Domain separation: after processing AAD (even if empty), set the MSB of S4: S4 ^= (1 << 63).
+- Padding: for AAD and PT, append 0x01 followed by zeros to fill a 16-byte block.
+- Outputs: ciphertext is le64(S0)||le64(S1) per block (truncate for partial tails); tag is le64(S3)||le64(S4).
 """
 
 
