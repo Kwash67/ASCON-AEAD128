@@ -70,10 +70,10 @@ def ascon_initialize(K, N):
     def le64(b):
         return int.from_bytes(b, "little")
 
-    kh = le64(key_bytes[0:8])
-    kl = le64(key_bytes[8:16])
-    nh = le64(nonce_bytes[0:8])
-    nl = le64(nonce_bytes[8:16])
+    kh = le64(key_bytes[0:8])  # Upper 64 bits of K
+    kl = le64(key_bytes[8:16])  # Lower 64 bits of K
+    nh = le64(nonce_bytes[0:8])  # Upper 64 bits of N
+    nl = le64(nonce_bytes[8:16])  # Lower 64 bits of N
 
     State[0] = IV
     State[1] = kh
@@ -85,8 +85,10 @@ def ascon_initialize(K, N):
     State = ascon_permutation(State, 12)
 
     # S ← S ⊕ (0^192 ‖ K)
-    State[3] ^= kh
-    State[4] ^= kl
+    # XOR K into the last 2 rows of the state
+    # This mixes in the key one more time
+    State[3] ^= kh  # XOR upper 64 bits of K
+    State[4] ^= kl  # XOR lower 64 bits of K
 
     return State
 
@@ -131,17 +133,21 @@ def process_associated_data(State, A, r=128):
         return int.from_bytes(b, "little")
 
     if len(A) > 0:
+        # Pad the last block
         pad_len = 16 - (len(A) % 16) - 1
         a_padding = b"\x01" + (b"\x00" * pad_len)
         a_padded = A + a_padding
 
+        # Then process each block (128 bit wide) by XORing with state and permuting
         for i in range(0, len(a_padded), 16):
             blk = a_padded[i : i + 16]
-            State[0] ^= le64(blk[0:8])
-            State[1] ^= le64(blk[8:16])
-            State = ascon_permutation(State, 8)
+            # XOR with the first two rows of State and apply permutation...
+            State[0] ^= le64(blk[0:8])  # XOR upper 64 bits of block
+            State[1] ^= le64(blk[8:16])  # XOR lower 64 bits of block
+            State = ascon_permutation(State, 8)  # Apply 8 rounds of permutation
 
-    # Domain separation bit: S[4] ^= 1<<63 (always, regardless of A length)
+    # Domain separation S ← S ⊕ (0319 ‖ 1)
+    # XOR the MSB of S4 (always, regardless of A length)
     State[4] ^= 1 << 63
     return State
 
@@ -164,17 +170,23 @@ def process_plaintext(State, P, r=128):
     # first t-1 blocks
     for i in range(0, len(p_padded) - rate, rate):
         blk = p_padded[i : i + rate]
-        State[0] ^= le64(blk[0:8])
-        State[1] ^= le64(blk[8:16])
+        # XOR with the first two rows of State and apply permutation... S[0∶127] ← S[0∶127] ⊕ 𝑃𝑖
+        State[0] ^= le64(blk[0:8])  # XOR upper 64 bits of block
+        State[1] ^= le64(blk[8:16])  # XOR lower 64 bits of block
+        # Extract ciphertext from state
         C.append(to_le64(State[0]) + to_le64(State[1]))
-        State = ascon_permutation(State, 8)
+        State = ascon_permutation(State, 8)  # Apply 8 rounds of permutation
 
     # last block
     blk = p_padded[len(p_padded) - rate :]
+    # Process the last block (which may be partial)
+    # S[0∶127] ← S[0∶127] ⊕ pad(𝑃𝑛, 128)
     State[0] ^= le64(blk[0:8])
     State[1] ^= le64(blk[8:16])
     if p_lastlen > 0:
+        # Emit ciphertext for the last block truncated to |P_n| bits
         chunk = to_le64(State[0]) + to_le64(State[1])
+        # KAT vectors are byte-aligned; truncate to the exact plaintext byte length
         C.append(chunk[:p_lastlen])
 
     return State, C
@@ -237,40 +249,6 @@ def pad(X, r=128):
     """
     pad_len = r - (len(X) % r)
     return X + "1" + ("0" * (pad_len - 1))
-
-
-def parse_input(X, r=128):
-    """
-    Parse the input bitstring X into a sequence of blocks of size r.
-    Args:
-        X : The input bitstring.
-        r : rate - The number of input bits processed per invocation of the
-            underlying permutation. Must be a positive integer.
-            Note that the rate and capacity of Ascon-AEAD128 are 128 and 192 bits, respectively.
-    Returns:
-        list: A list of byte strings, each of size r bits.
-    """
-    l = len(X) // r  # floor division, so we dont go out of index range
-    output_blocks = []
-    for i in range(l):
-        output_blocks.append(
-            X[i * r : (i + 1) * r]
-        )  # it's actually i(r) to (i+1)r -1, but python excludes the last index
-
-    output_blocks.append(X[l * r :])  # append the remaining bits as the last block
-    return output_blocks
-
-
-# Helper functions
-def bytes_to_bits(b):
-    # Useful if X is given as bytes instead of bitstring
-    return "".join(f"{byte:08b}" for byte in b)
-
-
-def parse_bytes(X, r):
-    # Useful if X is given as bytes instead of bitstring
-    bitstring = bytes_to_bits(X)
-    return parse_input(bitstring, r)
 
 
 def get_round_constant(rnd, i):
