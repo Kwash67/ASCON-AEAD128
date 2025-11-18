@@ -5,12 +5,25 @@ Si = word i within the state
 State = S0 || S1 || S2 || S3 || S4
 State size = 64 x 5 = 320 bits
 
-State visualization:
-S0    [][][][][][][][][][][][][][][][][][][][][][][]....[][][][][][][] <- LSB
-S1    [][][][][][][][][][][][][][][][][][][][][][][]....[][][][][][][] <- LSB
-S2    [][][][][][][][][][][][][][][][][][][][][][][]....[][][][][][][] <- LSB
-S3    [][][][][][][][][][][][][][][][][][][][][][][]....[][][][][][][] <- LSB
-S4    [][][][][][][][][][][][][][][][][][][][][][][]....[][][][][][][] <- LSB
+State visualization (little-endian bit indexing):
+S0    LSB -> [][][][][][][][][][][][][][][][][][][][][][][]....[][][][][][][] <- MSB
+      s(0,0)                                                          s(0,63)
+
+S1    LSB -> [][][][][][][][][][][][][][][][][][][][][][][]....[][][][][][][] <- MSB
+      s(1,0)                                                          s(1,63)
+
+S2    LSB -> [][][][][][][][][][][][][][][][][][][][][][][]....[][][][][][][] <- MSB
+      s(2,0)                                                          s(2,63)
+
+S3    LSB -> [][][][][][][][][][][][][][][][][][][][][][][]....[][][][][][][] <- MSB
+      s(3,0)                                                          s(3,63)
+
+S4    LSB -> [][][][][][][][][][][][][][][][][][][][][][][]....[][][][][][][] <- MSB
+      s(4,0)                                                          s(4,63)
+
+However, we work with integers here.
+Python abstracts away endianness for integers. When converting between bytes and integers,
+you specify endianness explicitly. Internally, Python handles the representation.
 
 Sizes of each param:
 
@@ -41,26 +54,37 @@ def ascon_initialize(K, N):
         State: The initialized state as a list of five 64-bit unsigned integers [S0, S1, S2, S3, S4].
     """
     State = [0] * 5
-    # NIST SP 800-232 Ascon-AEAD128 IV
+    # NIST SP 800-232 Ascon-AEAD128 IV (matches official reference layout)
     IV = 0x00001000808C0001
 
-    # S ← IV || K || N
+    # Convert key and nonce ints (big-endian) to bytes
+    key_bytes = int128_to_bytes(K)
+    nonce_bytes = int128_to_bytes(N)
+
+    # S ← IV || K || N, where each 64-bit lane uses little-endian byte-to-int
+    def le64(b):
+        return int.from_bytes(b, "little")
+
+    kh = le64(key_bytes[0:8])
+    kl = le64(key_bytes[8:16])
+    nh = le64(nonce_bytes[0:8])
+    nl = le64(nonce_bytes[8:16])
+
     State[0] = IV
-    State[1] = (K >> 64) & 0xFFFFFFFFFFFFFFFF  # Upper 64 bits of K
-    State[2] = K & 0xFFFFFFFFFFFFFFFF  # Lower 64 bits of K
-    State[3] = (N >> 64) & 0xFFFFFFFFFFFFFFFF  # Upper 64 bits of N
-    State[4] = N & 0xFFFFFFFFFFFFFFFF  # Lower 64 bits of N
+    State[1] = kh
+    State[2] = kl
+    State[3] = nh
+    State[4] = nl
 
     # Perform 12 rounds of the Ascon permutation
     State = ascon_permutation(State, 12)
 
     # S ← S ⊕ (0^192 ‖ K)
-    # XOR K into the last 2 rows of the state
-    # This mixes in the key one more time
-    State[3] ^= (K >> 64) & 0xFFFFFFFFFFFFFFFF  # XOR upper 64 bits of K
-    State[4] ^= K & 0xFFFFFFFFFFFFFFFF  # XOR lower 64 bits of K
+    State[3] ^= kh
+    State[4] ^= kl
 
     return State
+
 
 def ascon_permutation(State, rounds):
     """
@@ -72,14 +96,16 @@ def ascon_permutation(State, rounds):
         State: The permuted state as a list of five 64-bit unsigned integers [S0, S1, S2, S3, S4].
     """
     for i in range(0, rounds):
+        # 𝑝 = 𝑝𝐿 ∘ 𝑝𝑆 ∘ 𝑝𝐶
         # Constant Addition Layer (𝑝𝐶) where round constant is XORed to S2
         State[2] ^= get_round_constant(rounds, i)
 
         # S-box Layer (𝑝𝑆) — apply vertically for each bit position 0 to 63
-        for k in range(64):  # for each column
+        for k in range(64):  # for each column (bit position)
             S_box_input = []
 
-            for j in range(5):  # shift each row down by k and take LSB
+            # Extract the k-th bit from each of the 5 rows to form vertical slice
+            for j in range(5):
                 S_box_input.append((State[j] >> k) & 1)
 
             S_box_output = s_box_compute(S_box_input)
@@ -88,117 +114,101 @@ def ascon_permutation(State, rounds):
                 # clear k-th bit then set according to S_box_output[j]
                 State[j] = (State[j] & ~(1 << k)) | ((S_box_output[j] & 1) << k)
 
-        # Linear Diffusion Layer
+        # Linear Diffusion Layer (𝑝𝐿)
         State = linear_diffusion_layer(State)
 
     return State
 
 
 def process_associated_data(State, A, r=128):
-    if len(A) == 0:
-        # Domain separation S ← S ⊕ (0319 ‖ 1)
-        State[4] ^= 1  # XOR the LSB of S4
-        return State
+    # Process A in bytes, rate=16 bytes
+    def le64(b):
+        return int.from_bytes(b, "little")
 
-    A_blocks = parse_input(A, 128)  # Split into blocks (returns bitstrings)
-    # Pad the last block
-    A_blocks[-1] = pad(A_blocks[-1], 128)
+    if len(A) > 0:
+        pad_len = 16 - (len(A) % 16) - 1
+        a_padding = b"\x01" + (b"\x00" * pad_len)
+        a_padded = A + a_padding
 
-    # Then process each block (128 bit wide) by XORing with state and permuting
-    for block in A_blocks:
-        # Convert bitstring to integer
-        block_int = int(block, 2)
+        for i in range(0, len(a_padded), 16):
+            blk = a_padded[i : i + 16]
+            State[0] ^= le64(blk[0:8])
+            State[1] ^= le64(blk[8:16])
+            State = ascon_permutation(State, 8)
 
-        # XOR with the first two rows of State and apply permutation...
-        State[0] ^= (block_int >> 64) & 0xFFFFFFFFFFFFFFFF  # XOR upper 64 bits of block
-        State[1] ^= block_int & 0xFFFFFFFFFFFFFFFF  # XOR lower 64 bits of block
-
-        State = ascon_permutation(State, 8)  # Apply 8 rounds of permutation
-
-    # Domain separation S ← S ⊕ (0319 ‖ 1)
-    State[4] ^= 1  # XOR the LSB of S4
-
+    # Domain separation bit: S[4] ^= 1<<63 (always, regardless of A length)
+    State[4] ^= 1 << 63
     return State
 
 
 def process_plaintext(State, P, r=128):
     C = []  # List to hold ciphertext blocks
 
-    P_blocks = parse_input(P, 128)  # Split into blocks (returns bitstrings)
-    # Keep track of the length of the last block
-    l = len(P_blocks[-1])
+    def le64(b):
+        return int.from_bytes(b, "little")
 
-    # Process full blocks only for now
-    for block in P_blocks[:-1]:
-        # Convert bitstring to integer
-        block_int = int(block, 2)
+    def to_le64(x):
+        return x.to_bytes(8, "little")
 
-        # XOR with the first two rows of State and apply permutation... S[0∶127] ← S[0∶127] ⊕ 𝑃𝑖
-        State[0] ^= (block_int >> 64) & 0xFFFFFFFFFFFFFFFF  # XOR upper 64 bits of block
-        State[1] ^= block_int & 0xFFFFFFFFFFFFFFFF  # XOR lower 64 bits of block
+    rate = 16
+    p_lastlen = len(P) % rate
+    pad_len = rate - p_lastlen - 1
+    p_padding = b"\x01" + (b"\x00" * pad_len)
+    p_padded = P + p_padding
 
-        # Extract ciphertext from state
-        ct_int = (State[0] << 64) | State[1]
-        C.append(ct_int.to_bytes(16, "big"))
+    # first t-1 blocks
+    for i in range(0, len(p_padded) - rate, rate):
+        blk = p_padded[i : i + rate]
+        State[0] ^= le64(blk[0:8])
+        State[1] ^= le64(blk[8:16])
+        C.append(to_le64(State[0]) + to_le64(State[1]))
+        State = ascon_permutation(State, 8)
 
-        State = ascon_permutation(State, 8)  # Apply 8 rounds of permutation
-
-    # Process the last block (which may be partial)
-    # S[0∶127] ← S[0∶127] ⊕ pad(𝑃𝑛, 128)
-    last_bits = P_blocks[-1]
-    last_block_padded = pad(last_bits, 128)
-    last_block_int = int(last_block_padded, 2)
-    State[0] ^= (
-        last_block_int >> 64
-    ) & 0xFFFFFFFFFFFFFFFF  # XOR upper 64 bits of padded last block
-    State[1] ^= (
-        last_block_int & 0xFFFFFFFFFFFFFFFF
-    )  # XOR lower 64 bits of padded last block
-
-    # Emit ciphertext for the last block truncated to |P_n| bits
-    if l > 0:
-        ct_int = (State[0] << 64) | State[1]
-        ct_bytes_full = ct_int.to_bytes(16, "big")
-        # KAT vectors are byte-aligned; truncate to the exact plaintext byte length
-        last_len_bytes = l // 8
-        C.append(ct_bytes_full[:last_len_bytes])
+    # last block
+    blk = p_padded[len(p_padded) - rate :]
+    State[0] ^= le64(blk[0:8])
+    State[1] ^= le64(blk[8:16])
+    if p_lastlen > 0:
+        chunk = to_le64(State[0]) + to_le64(State[1])
+        C.append(chunk[:p_lastlen])
 
     return State, C
 
 
 def finalize(State, K):
+    key_bytes = int128_to_bytes(K)
+
+    def le64(b):
+        return int.from_bytes(b, "little")
+
+    def to_le64(x):
+        return x.to_bytes(8, "little")
+
+    kh = le64(key_bytes[0:8])
+    kl = le64(key_bytes[8:16])
+
     # S ← S ⊕ (0^128 ‖ K || 0^64)
-    # XOR K into the 3rd and 4th rows of the state
-    State[2] ^= (K >> 64) & 0xFFFFFFFFFFFFFFFF  # XOR upper 64 bits of K
-    State[3] ^= K & 0xFFFFFFFFFFFFFFFF  # XOR lower 64 bits of K
+    State[2] ^= kh
+    State[3] ^= kl
 
-    State = ascon_permutation(State, 12)  # Apply 12 rounds of permutation
+    State = ascon_permutation(State, 12)
 
-    # S ← S ⊕ (0^192 ‖ K)
-    # XOR K into the last 2 rows of the state again
-    T0 = State[3] ^ ((K >> 64) & 0xFFFFFFFFFFFFFFFF)
-    T1 = State[4] ^ (K & 0xFFFFFFFFFFFFFFFF)
-
-    # Extract tag T from the last 2 rows: S3 || S4
-    T_int = (T0 << 64) | T1
-    T = T_int.to_bytes(16, "big")  # Convert to bytes
-
+    # S ← S ⊕ (0^192 ‖ K), and extract tag
+    T0 = State[3] ^ kh
+    T1 = State[4] ^ kl
+    T = to_le64(T0) + to_le64(T1)
     return T
 
 
 def ascon_aead128_enc(K, N, A, P):
-    # Convert bytes to bitstrings
-    A_bits = bytes_to_bits(A) if isinstance(A, bytes) else A
-    P_bits = bytes_to_bits(P) if isinstance(P, bytes) else P
-
     # Initialize
     State = ascon_initialize(K, N)
 
-    # Process associated data
-    State = process_associated_data(State, A_bits)
+    # Process associated data (bytes)
+    State = process_associated_data(State, A)
 
-    # Process plaintext
-    State, C = process_plaintext(State, P_bits)
+    # Process plaintext (bytes)
+    State, C = process_plaintext(State, P)
 
     # Finalization
     T = finalize(State, K)
