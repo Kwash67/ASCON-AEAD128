@@ -1,1 +1,6 @@
 /__pycache__
+test/__pycache__
+test/sim_build
+test/syn_aead.v
+test/results.xml
+.vscode
