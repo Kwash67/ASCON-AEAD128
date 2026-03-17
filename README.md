@@ -60,6 +60,10 @@ The test parses `LWC_AEAD_KAT_128_128.txt`, runs your encrypt function on each v
 
 ## Verilog RTL: Hardware Simulation
 
+### RTL Block Diagram
+
+![RTL Block Diagram](rtl_block_diagram.png)
+
 ### Structure
 - **rtl/**: Synthesizable RTL (3 modules)
   - `ascon_top.v` — FSM controller (17 states)
