@@ -1,13 +1,35 @@
 # ASCON-AEAD128
-Python and Verilog Implementation of ASCON-AEAD-128 for RFID application.
 
-Based on recent NIST publication NIST SP 800-232 https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-232.pdf
+Python reference implementation and synthesizable Verilog RTL for ASCON-AEAD-128.
 
-## Generate KATs and Run Tests
+**Spec**: NIST SP 800-232 https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-232.pdf
 
-This repo includes the official Python reference to generate Known Answer Tests (KATs) for Ascon-AEAD128 and a simple test harness for your implementation in `ascon128.py`.
+---
 
-### Generate AEAD KATs (official)
+## Quick Start (Functional Testing)
+
+### Python Reference (Software)
+```bash
+python3 test_ascon_kats.py
+```
+
+### Verilog RTL (Hardware)
+```bash
+cd test && make
+```
+
+---
+
+## Python
+
+NOTE: If you only care about RTL, this section is optional.
+
+The official software reference is in `official_ascon/`.
+
+`ascon128.py` is just an **encryption-only educational implementation** that explains the cypher more simply. It is optional for RTL users, but kept because it contains helpful comments and descriptions that some might find useful. 
+`test_ascon_kats.py` validates it against official KAT vectors.
+
+### Generate KATs (Known Answer Tests)
 
 From the repo root, run:
 
@@ -17,9 +39,9 @@ python3 official_ascon/genkat.py Ascon-AEAD128
 
 This will produce both `LWC_AEAD_KAT_128_128.txt` and `LWC_AEAD_KAT_128_128.json` in the repo root.
 
-### Run the KAT tests against your implementation
+### Run KAT validation
 
-Ensure your implementation exposes `ascon_aead128_enc(K, N, ad, pt)` that returns `(ciphertext_blocks: List[bytes], tag: bytes)`, where tag is 16 bytes.
+`test_ascon_kats.py` calls `ascon_aead128_enc(K, N, ad, pt)` from `ascon128.py` and checks ciphertext+tag against the generated KAT file.
 
 Then run:
 
@@ -31,6 +53,50 @@ The test parses `LWC_AEAD_KAT_128_128.txt`, runs your encrypt function on each v
 
 ### Notes
 
-- The official generator uses the variant name `Ascon-AEAD128`.
 - The KAT `CT` field is `ciphertext || tag` (tag is always 16 bytes).
 - Keys and nonces in `test_ascon_kats.py` are interpreted as big-endian integers before being passed to your function.
+
+---
+
+## Verilog RTL: Hardware Simulation
+
+### Structure
+- **rtl/**: Synthesizable RTL (3 modules)
+  - `ascon_top.v` — FSM controller (17 states)
+  - `ascon_datapath.v` — State register + 14 datapath operations
+  - `ascon_permutation.v` — Permutation engine (iterative, 1 round/cycle)
+
+- **test/**: Cocotb simulation harness
+  - `test.py` — 200 test vectors (random key/nonce/data, 0–10 bytes each)
+  - `Makefile` — Build script (Verilator + cocotb)
+
+- **syn/**: Post-synthesis
+  - `syn_aead.ys` — Yosys synthesis script
+  - `syn_aead.v` — Gate-level netlist (18,433 cells)
+
+### Run Simulation
+```bash
+cd test
+make clean
+make
+```
+
+Output: `TESTS=2 PASS=2 FAIL=0` (100 encryption + 100 decryption vectors)
+
+### Run Synthesis
+```bash
+cd syn
+yosys syn_aead.ys
+```
+
+Output: `syn_aead.v` (91.2k µm², ~400 MHz estimated @ 65nm)
+
+### Test Coverage
+- **Encryption**: All vector lengths (100 tests)
+- **Decryption**: Authentication + plaintext recovery (100 tests)
+- **Edge cases**: Empty AD, empty message, partial blocks
+
+### Notes
+- Default test config: `MAX_LEN=10` (generates 10×10 length combinations)
+- Simulation speed: ~10.7µs per full regression (∼1 sec real time)
+- Testbench validates against Python reference implementation
