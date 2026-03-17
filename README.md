@@ -85,22 +85,8 @@ make clean
 make
 ```
 
-Output: `TESTS=2 PASS=2 FAIL=0` (100 encryption + 100 decryption vectors)
-
 ### Run Synthesis
 ```bash
 cd syn
 yosys syn_aead.ys
 ```
-
-Output: `syn_aead.v` (91.2k µm², ~400 MHz estimated @ 65nm)
-
-### Test Coverage
-- **Encryption**: All vector lengths (100 tests)
-- **Decryption**: Authentication + plaintext recovery (100 tests)
-- **Edge cases**: Empty AD, empty message, partial blocks
-
-### Notes
-- Default test config: `MAX_LEN=10` (generates 10×10 length combinations)
-- Simulation speed: ~10.7µs per full regression (∼1 sec real time)
-- Testbench validates against Python reference implementation
