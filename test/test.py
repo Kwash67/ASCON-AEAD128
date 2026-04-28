@@ -6,6 +6,7 @@ from pathlib import Path
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge
+from cocotb.utils import get_sim_time
 
 sys.path.append(str(Path(__file__).resolve().parents[1] / "test"))
 from ascon import ascon_encrypt
@@ -14,6 +15,8 @@ VERBOSE = int(os.getenv("VERBOSE", "1"))
 MAX_LEN = int(os.getenv("MAX_LEN", "10"))
 RUNS = range(0, MAX_LEN)
 STALLS = int(os.getenv("STALLS", "0"))
+
+CLK_PERIOD_NS = 1.0
 
 CCWD8 = 16
 
@@ -193,6 +196,8 @@ async def test_enc(dut):
 
             log(dut, verbose=2, dashes=0, ad=ad, pt=pt, ct=ct_ref, tag=tag_ref)
 
+            start_ns = get_sim_time(unit="ns")
+
             await send_key(dut, key)
 
             await send_data(
@@ -224,8 +229,20 @@ async def test_enc(dut):
 
             tag_hw = await receive_tag(dut)
 
+            end_ns = get_sim_time(unit="ns")
+            latency_ns = end_ns - start_ns
+            latency_cycles = int(round(latency_ns / CLK_PERIOD_NS))
+
             assert bytes(ct_hw) == bytes(ct_ref), "ct mismatch"
             assert bytes(tag_hw) == bytes(tag_ref), "tag mismatch"
+
+            dut._log.info(
+                "latency   ENC ad:%d msg:%d cycles:%d time_ns:%.1f",
+                adlen,
+                msglen,
+                latency_cycles,
+                latency_ns,
+            )
 
             await RisingEdge(dut.clk)
             log(dut, verbose=1, dashes=1)
@@ -259,6 +276,8 @@ async def test_dec(dut):
             )
 
             log(dut, verbose=2, dashes=0, ad=ad, ct=ct_ref, tag=tag_ref, pt=pt_ref)
+
+            start_ns = get_sim_time(unit="ns")
 
             await send_key(dut, key)
 
@@ -298,8 +317,20 @@ async def test_dec(dut):
             )
 
             await wait_auth_valid(dut)
+            end_ns = get_sim_time(unit="ns")
+            latency_ns = end_ns - start_ns
+            latency_cycles = int(round(latency_ns / CLK_PERIOD_NS))
+
             assert int(dut.auth.value) == 1, "auth failed"
             assert bytes(pt_hw) == bytes(pt_ref), "pt mismatch"
+
+            dut._log.info(
+                "latency   DEC ad:%d msg:%d cycles:%d time_ns:%.1f",
+                adlen,
+                msglen,
+                latency_cycles,
+                latency_ns,
+            )
 
             await RisingEdge(dut.clk)
             log(dut, verbose=1, dashes=1)

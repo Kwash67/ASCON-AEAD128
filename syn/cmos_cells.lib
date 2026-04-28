@@ -1,4 +1,3 @@
-// test comment
 /* test comment */
 library(demo) {
   cell(BUF) {
@@ -50,6 +49,6 @@ library(demo) {
               function: "IQ"; }
     pin(S) { direction: input; }
     pin(R) { direction: input; }
-    ; // empty statement
+    ;
   }
 }
