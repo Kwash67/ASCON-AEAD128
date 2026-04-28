@@ -1,4 +1,4 @@
-module ascon_datapath (
+module ascon_core (
     input wire         clk,
     input wire         rst,
     input wire         decrypt,          // 0=encrypt, 1=decrypt

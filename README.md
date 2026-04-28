@@ -67,7 +67,7 @@ The test parses `LWC_AEAD_KAT_128_128.txt`, runs your encrypt function on each v
 ### Structure
 - **rtl/**: Synthesizable RTL (3 modules)
   - `ascon_top.v` — FSM controller (17 states)
-  - `ascon_datapath.v` — State register + 14 datapath operations
+  - `ascon_core.v` — State register + 14 state/update operations
   - `ascon_permutation.v` — Permutation engine (iterative, 1 round/cycle)
 
 - **test/**: Cocotb simulation harness

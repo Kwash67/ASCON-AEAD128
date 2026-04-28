@@ -14,7 +14,7 @@ MODULE = test
 
 VERILOG_SOURCES = \
 	$(PWD)/../rtl/ascon_top.v \
-	$(PWD)/../rtl/ascon_datapath.v \
+	$(PWD)/../rtl/ascon_core.v \
 	$(PWD)/../rtl/ascon_permutation.v
 
 include $(shell cocotb-config --makefiles)/Makefile.sim

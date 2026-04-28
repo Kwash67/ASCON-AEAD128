@@ -2,7 +2,7 @@
 
 # read design 
 read_verilog -sv ../rtl/ascon_top.v
-read_verilog -sv ../rtl/ascon_datapath.v
+read_verilog -sv ../rtl/ascon_core.v
 read_verilog -sv ../rtl/ascon_permutation.v
 
 # generic synthesis

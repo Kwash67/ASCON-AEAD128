@@ -41,7 +41,7 @@ module ascon_top (
   reg  [  3:0] perm_rounds;
 
   // Datapath operation code
-  reg  [  3:0] dp_op;
+  reg  [  3:0] core_op;
 
   // Operation codes for datapath (must match datapath module)
   localparam OP_IDLE = 4'd0;
@@ -131,7 +131,7 @@ module ascon_top (
 
     perm_start        = 1'b0;
     perm_rounds       = 4'd0;
-    dp_op             = OP_IDLE;
+    core_op           = OP_IDLE;
 
     case (fsm_state)
       IDLE: begin
@@ -148,14 +148,14 @@ module ascon_top (
 
       LD_KEY: begin
         key_ready      = 1'b1;
-        dp_op          = OP_LD_KEY;
+        core_op        = OP_LD_KEY;
         next_fsm_state = LD_NPUB;
       end
 
       LD_NPUB: begin
         bdi_ready = 1'b1;
         if (bdi_valid != 16'd0 && bdi_type == BDI_TYPE_NPUB) begin
-          dp_op          = OP_LD_NPUB;
+          core_op        = OP_LD_NPUB;
           next_flag_eoi  = bdi_eoi;
           next_fsm_state = INIT;
         end
@@ -163,12 +163,12 @@ module ascon_top (
 
       INIT: begin
         if (!init_loaded) begin
-          dp_op = OP_INIT;
+          core_op = OP_INIT;
           next_init_loaded = 1'b1;
         end else begin
           perm_rounds = 4'd12;
           if (perm_done) begin
-            dp_op            = OP_PERM_WB;
+            core_op          = OP_PERM_WB;
             next_init_loaded = 1'b0;
             next_fsm_state   = KADD_2;
           end else begin
@@ -178,7 +178,7 @@ module ascon_top (
       end
 
       KADD_2: begin
-        dp_op = OP_KADD2;
+        core_op = OP_KADD2;
         if (flag_eoi || (bdi_valid != 16'd0)) begin
           if (flag_eoi) begin
             next_fsm_state = DOM_SEP;
@@ -193,7 +193,7 @@ module ascon_top (
       ABS_AD: begin
         if (bdi_valid != 16'd0 && bdi_type == BDI_TYPE_AD) begin
           bdi_ready = 1'b1;
-          dp_op     = OP_ABS_AD;
+          core_op   = OP_ABS_AD;
           if (bdi_eot) begin
             next_flag_ad_eot = 1'b1;
           end
@@ -208,7 +208,7 @@ module ascon_top (
       end
 
       PAD_AD: begin
-        dp_op            = OP_PAD_AD;
+        core_op          = OP_PAD_AD;
         next_flag_ad_pad = 1'b1;
         next_fsm_state   = PRO_AD;
       end
@@ -216,7 +216,7 @@ module ascon_top (
       PRO_AD: begin
         perm_rounds = 4'd8;
         if (perm_done) begin
-          dp_op = OP_PERM_WB;
+          core_op = OP_PERM_WB;
           if (flag_ad_eot == 1'b0) begin
             next_fsm_state = ABS_AD;
           end else if (flag_ad_pad == 1'b0) begin
@@ -230,7 +230,7 @@ module ascon_top (
       end
 
       DOM_SEP: begin
-        dp_op = OP_DOM_SEP;
+        core_op = OP_DOM_SEP;
         if (flag_eoi) begin
           next_flag_msg_pad = 1'b1;
           next_fsm_state = PAD_MSG;
@@ -244,7 +244,7 @@ module ascon_top (
           bdi_ready = 1'b1;
           bdo_valid = 1'b1;  // Output ciphertext (enc) or plaintext (dec)
           bdo_type  = 2'b10;  // MSG type
-          dp_op     = OP_ABS_MSG;
+          core_op   = OP_ABS_MSG;
           // Wait for both input accepted and output consumed
           if (bdo_ready) begin
             if (bdi_eoi) begin
@@ -261,7 +261,7 @@ module ascon_top (
       end
 
       PAD_MSG: begin
-        dp_op             = OP_PAD_MSG;
+        core_op           = OP_PAD_MSG;
         next_flag_msg_pad = 1'b1;
         next_fsm_state    = KADD_3;
       end
@@ -269,7 +269,7 @@ module ascon_top (
       PRO_MSG: begin
         perm_rounds = 4'd8;
         if (perm_done) begin
-          dp_op = OP_PERM_WB;
+          core_op = OP_PERM_WB;
           if (flag_eoi == 1'b0) begin
             next_fsm_state = ABS_MSG;
           end else if (flag_msg_pad == 1'b0) begin
@@ -283,14 +283,14 @@ module ascon_top (
       end
 
       KADD_3: begin
-        dp_op          = OP_KADD3;
+        core_op        = OP_KADD3;
         next_fsm_state = FINAL;
       end
 
       FINAL: begin
         perm_rounds = 4'd12;
         if (perm_done) begin
-          dp_op          = OP_PERM_WB;
+          core_op        = OP_PERM_WB;
           next_fsm_state = KADD_4;
         end else begin
           perm_start = 1'b1;
@@ -298,7 +298,7 @@ module ascon_top (
       end
 
       KADD_4: begin
-        dp_op          = OP_KADD4;
+        core_op        = OP_KADD4;
         next_fsm_state = SQZ_TAG;
       end
 
@@ -307,7 +307,7 @@ module ascon_top (
           // Decryption: receive tag for verification
           if (bdi_valid != 16'd0 && bdi_type == 2'b11) begin  // TAG type
             bdi_ready = 1'b1;
-            dp_op = OP_LD_TAG;
+            core_op = OP_LD_TAG;
             next_fsm_state = VER_TAG;
           end
         end else begin
@@ -334,15 +334,15 @@ module ascon_top (
     endcase
   end
 
-  // datapath
-  ascon_datapath dp (
+  // state core
+  ascon_core core (
       .clk(clk),
       .rst(rst),
       .decrypt(decrypt),
       .key(key),
       .bdi(bdi),
       .bdi_valid_bytes(bdi_valid),
-      .dp_op(dp_op),
+      .core_op(core_op),
       .perm_state_out(ascon_state_out),
       .state_to_perm(ascon_state_in),
       .bdo(bdo),
